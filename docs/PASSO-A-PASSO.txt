@@ -38,8 +38,11 @@ essa checagem antes de baixar qualquer byte.
 2. ONDE FICA CADA COISA (dentro do repo da AURORA)
 --------------------------------------------------------------------------------
 
-    resources/pylib-catalog.json      A LISTA. Gerado, nao edite a mao.
-    scripts/gen-pylib-catalog.js      Gera o arquivo acima. E AQUI que se edita.
+    catalog.json (NESTE REPO)         A LISTA que a AURORA baixa.
+    resources/pylib-catalog.json      Copia embutida na AURORA (reserva).
+    scripts/gen-pylib-catalog.js      Gera as duas. E AQUI que se edita.
+    main/python/pylib_catalog.js      Escolhe entre remoto e embutido.
+    assets/icons/pylibs.json          Ids de icone que o sprite tem.
     main/python/pylib_manager.js      Instala, desinstala, repara, diagnostica.
     main/python/pylib_paths.js        Define onde as libs sao instaladas.
     main/net/fetcher.js               Download + hash + extracao (compartilhado).
@@ -109,14 +112,35 @@ Passo 3. Abra scripts/gen-pylib-catalog.js e adicione uma entrada no array
     cocotb, modelo de referencia, analise de erro, geracao de HDL). E o que
     aparece no painel quando o usuario expande a linha.
 
-Passo 4. Se quiser um icone proprio, adicione um <symbol id="pylib-SEU-ID">
-    dentro de assets/icons/pylibs.svg. Use "currentColor" no traco/preenchimento
-    para o icone acompanhar o tema. Sem icone proprio, use icon: 'generic'.
+Passo 4. Icone. O campo `icon` guarda o NOME de um simbolo, nunca o desenho —
+    o desenho vive dentro da AURORA e nao viaja pela lista.
 
-Passo 5. Regere o catalogo e rode os testes:
+    Escolha um dos ids que ja existem (veja assets/icons/pylibs.json na AURORA):
+    marcas reais para python, numpy, scipy, pandas, plotly, pytest, sympy, tqdm
+    e rich; simbolos de categoria para vcd, cocotb, pyuvm, pygal, plotext,
+    drawsvg, mpmath, fixedpoint, uncertainties, intelhex, construct, crc,
+    pyserial, networkx, tabulate, humanize e matplotlib; e 'generic' no resto.
 
+    Um nome que a AURORA instalada nao conhecer cai no generico sozinho, sem
+    quebrar a tela. Entao da para citar um icone novo na lista antes de a AURORA
+    ter o desenho — ele aparece bonito quando sair a versao nova.
+
+    Para acrescentar um simbolo de fato, edite BRANDS ou NEUTRAL em
+    scripts/gen-pylib-icons.js e rode-o. Isso exige versao nova da AURORA.
+
+Passo 5. Regere o catalogo, rode os testes e PUBLIQUE:
+
+    # no repositorio da AURORA
     node scripts/gen-pylib-catalog.js
     npx vitest run tests/unit/pylibs.test.js
+    git commit -am "libs: ..."          # a copia embutida vai junto
+
+    # publica a lista que a AURORA baixa
+    cp resources/pylib-catalog.json ../aurora-pylibs/catalog.json
+    cd ../aurora-pylibs && git commit -am "libs: ..." && git push
+
+    Commitar a copia embutida junto NAO e opcional: e ela que responde no
+    primeiro uso, sem internet e se este repo estiver fora do ar.
 
     O gerador busca versao, URL, tamanho e sha256 direto da PyPI e recusa
     sozinho qualquer coisa que nao seja pura. Se ele imprimir "entrada(s)
@@ -160,6 +184,10 @@ Para atualizar o catalogo inteiro:
 Para conferir se o catalogo esta desatualizado sem reescrever nada:
 
     node scripts/gen-pylib-catalog.js --check    # sai com erro se mudou
+
+O campo schemaVersion so muda quando o FORMATO mudar de forma incompativel.
+Acrescentar biblioteca, mudar descricao ou bumpar versao nao mexe nele. Subir o
+schemaVersion faz toda AURORA mais antiga RECUSAR a lista e usar a embutida.
 
 Quem ja tem a versao antiga instalada continua com ela ate clicar em Reparar no
 painel, que reinstala na versao nova.
