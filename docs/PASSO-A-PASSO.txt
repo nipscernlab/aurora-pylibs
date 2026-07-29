@@ -1,0 +1,294 @@
+================================================================================
+BIBLIOTECAS PYTHON NA AURORA - PASSO A PASSO
+Como alterar o catalogo, e o que acontece ao instalar e remover.
+Atualizado em 28/07/2026.
+================================================================================
+
+
+1. A REGRA QUE DECIDE TUDO
+--------------------------------------------------------------------------------
+
+O Python que vem dentro da AURORA nao e o CPython da python.org. E um build
+MinGW empacotado pelo MSYS2:
+
+    components/Packages/msys/mingw64/bin/python.exe
+    Python 3.12.11   platform: mingw_x86_64_msvcrt_gnu
+
+Consequencia, medida na pratica e nao suposta:
+
+    BIBLIOTECA PYTHON PURA ......... FUNCIONA. E so descompactar no lugar certo.
+    BIBLIOTECA COM CODIGO EM C ..... NAO CARREGA. Nunca. Nem renomeando o .pyd.
+
+Os tres testes que estabeleceram isso:
+
+    plotly, wheel da PyPI              -> importou, gerou grafico HTML.
+    numpy, pacote mingw64 do MSYS2     -> falhou. O repo do MSYS2 hoje entrega
+                                          Python 3.14 e o pacote vem cp314.
+    numpy, wheel binaria da PyPI       -> falhou com "DLL load failed". O .pyd
+                                          procura a python312.dll da Microsoft,
+                                          que nao existe no build MinGW.
+
+Como saber, para qualquer biblioteca, em qual grupo ela cai: olhe o nome da
+wheel na PyPI. Se termina em "-none-any.whl" (ex.: py3-none-any, py2.py3-none-any)
+ela e pura e instala. Qualquer outra terminacao (cp312-win_amd64 e afins) tem
+codigo compilado e nao instala. Isso e verificavel por script, e o painel ja faz
+essa checagem antes de baixar qualquer byte.
+
+
+2. ONDE FICA CADA COISA (dentro do repo da AURORA)
+--------------------------------------------------------------------------------
+
+    resources/pylib-catalog.json      A LISTA. Gerado, nao edite a mao.
+    scripts/gen-pylib-catalog.js      Gera o arquivo acima. E AQUI que se edita.
+    main/python/pylib_manager.js      Instala, desinstala, repara, diagnostica.
+    main/python/pylib_paths.js        Define onde as libs sao instaladas.
+    main/net/fetcher.js               Download + hash + extracao (compartilhado).
+    main/ipc/pylibs.js                Os canais IPC do painel.
+    js/python/pylib_panel.js          O painel (interface).
+    css/panels/pylib_panel.css        Estilo do painel.
+    assets/icons/pylibs.svg           Os icones das bibliotecas.
+    tests/unit/pylibs.test.js         Testes.
+
+Onde as bibliotecas sao INSTALADAS na maquina do usuario:
+
+    components/PyLibs/site/           Os arquivos importaveis.
+    components/PyLibs/installed.json  O manifesto do que esta instalado.
+
+NAO e o site-packages do bundle. Aquela pasta pertence a toolchain, e re-baixada
+pelo bootstrap e pelo doutor de componentes, e o components/Packages inteiro e
+descartavel. Biblioteca instalada la dentro se perde num --force ou quando
+alguem apaga a pasta para consertar a toolchain.
+
+
+3. COMO ADICIONAR UMA BIBLIOTECA AO CATALOGO
+--------------------------------------------------------------------------------
+
+Passo 1. Confira se ela e pura. No terminal, na raiz da AURORA:
+
+    node -e "const {getJson}=require('./main/net/fetcher');(async()=>{
+      const m=await getJson('https://pypi.org/pypi/NOME/json');
+      const p=(m.urls||[]).filter(u=>u.filename.endsWith('-none-any.whl'));
+      console.log(m.info.version, p[0]?p[0].filename:'NAO E PURA');
+      console.log('deps:', (m.info.requires_dist||[]).join(' ; '));
+    })()"
+
+    Se imprimir "NAO E PURA", pare. Ela nao entra. Se quiser, cadastre-a na
+    lista COMPILED (passo 6) para o painel explicar por que nao da.
+
+Passo 2. Repita o passo 1 para CADA dependencia listada em "deps". Se qualquer
+    uma delas nao for pura, a biblioteca inteira nao entra. Sem pip no runtime
+    embarcado nao existe resolvedor: o catalogo precisa do fecho completo, e uma
+    dependencia compilada derruba o conjunto.
+
+    (Foi assim que Jinja2 ficou de fora: depende de MarkupSafe, que so publica
+    wheel compilada. E cocotb-coverage tambem: depende de python-constraint,
+    que so publica sdist, e de PyYAML, que so publica wheel compilada.)
+
+Passo 3. Abra scripts/gen-pylib-catalog.js e adicione uma entrada no array
+    CURATED:
+
+        {
+          id: 'nome-curto',            // identificador interno, sem espaco
+          pypi: 'NomeNaPyPI',          // nome exato na PyPI
+          deps: ['dep1', 'dep2'],      // TODAS as dependencias, do passo 2
+          category: 'hdl',             // hdl | math | viz | test | cli
+          icon: 'vcd',                 // um id de simbolo do assets/icons/pylibs.svg
+          name: 'Nome Exibido',
+          homepage: 'https://...',
+          summary: {
+            pt: 'Uma frase dizendo o que a biblioteca e.',
+            en: 'Same, in English.',
+          },
+          uses: {
+            pt: ['Para que serve no SAPHO, caso 1', 'caso 2'],
+            en: ['What it is for, case 1', 'case 2'],
+          },
+        },
+
+    Escreva os "uses" pensando no trabalho real do laboratorio (testbench
+    cocotb, modelo de referencia, analise de erro, geracao de HDL). E o que
+    aparece no painel quando o usuario expande a linha.
+
+Passo 4. Se quiser um icone proprio, adicione um <symbol id="pylib-SEU-ID">
+    dentro de assets/icons/pylibs.svg. Use "currentColor" no traco/preenchimento
+    para o icone acompanhar o tema. Sem icone proprio, use icon: 'generic'.
+
+Passo 5. Regere o catalogo e rode os testes:
+
+    node scripts/gen-pylib-catalog.js
+    npx vitest run tests/unit/pylibs.test.js
+
+    O gerador busca versao, URL, tamanho e sha256 direto da PyPI e recusa
+    sozinho qualquer coisa que nao seja pura. Se ele imprimir "entrada(s)
+    recusada(s)", leia o motivo: e sempre concreto.
+
+Passo 6. (Opcional) Para uma biblioteca compilada que voce QUER mostrar no
+    painel com a explicacao de por que nao instala, adicione ao array COMPILED
+    em vez do CURATED. Mesma forma, sem "deps" e sem "pypi" obrigatorio. Ela
+    aparece marcada como "compilada", com o botao desabilitado e o texto
+    explicando o motivo e apontando o TCMD.
+
+
+4. COMO REMOVER UMA BIBLIOTECA DO CATALOGO
+--------------------------------------------------------------------------------
+
+Apague a entrada do array CURATED (ou COMPILED) em scripts/gen-pylib-catalog.js
+e rode de novo:
+
+    node scripts/gen-pylib-catalog.js
+
+Deixe um comentario curto no lugar dizendo POR QUE saiu. O arquivo ja tem dois
+exemplos disso (Jinja2 e cocotb-coverage). Isso evita que alguem tente
+recolocar daqui a seis meses e bata na mesma parede.
+
+Atencao: quem ja tinha a biblioteca instalada continua com ela no disco. O
+painel deixa de oferece-la, mas o manifesto do usuario ainda a lista. Isso e de
+proposito: tirar do catalogo nao pode apagar o que ja esta funcionando na
+maquina de alguem.
+
+
+5. COMO MUDAR A VERSAO DE UMA BIBLIOTECA
+--------------------------------------------------------------------------------
+
+Voce nao escolhe a versao a mao. O gerador sempre pega a versao ATUAL da PyPI.
+Para atualizar o catalogo inteiro:
+
+    node scripts/gen-pylib-catalog.js
+    git diff resources/pylib-catalog.json     # confira o que mudou
+    npx vitest run tests/unit/pylibs.test.js
+
+Para conferir se o catalogo esta desatualizado sem reescrever nada:
+
+    node scripts/gen-pylib-catalog.js --check    # sai com erro se mudou
+
+Quem ja tem a versao antiga instalada continua com ela ate clicar em Reparar no
+painel, que reinstala na versao nova.
+
+
+6. O QUE ACONTECE AO INSTALAR (mecanica)
+--------------------------------------------------------------------------------
+
+Ao clicar em Instalar, para cada wheel da biblioteca e das dependencias:
+
+    1. BAIXA     a wheel da PyPI, pela URL fixada no catalogo, calculando o
+                 sha256 em streaming. O botao vira um anel com a porcentagem
+                 real de bytes recebidos.
+    2. CONFERE   o sha256 contra o que o catalogo fixou. Diferente = aborta,
+                 antes de escrever qualquer coisa no site/.
+    3. INSPECIONA a lista de arquivos de dentro da wheel e recusa qualquer
+                 caminho com ".." ou absoluto (uma wheel e um zip da internet).
+    4. EXTRAI    em components/PyLibs/site/.
+    5. ANOTA     em installed.json a versao, a data e a lista completa de
+                 arquivos escritos.
+
+O passo 5 e o que torna a desinstalacao exata em vez de chute.
+
+Para o cocotb enxergar as bibliotecas, components/PyLibs/site entra no
+AURORA_COCOTB_PYTHONPATH. Isso e feito no processo principal, em
+main/compile/executor.js, e nao no renderer: assim vale sempre e um override da
+Aurora Intelligence nao consegue reescrever o caminho.
+
+
+7. O QUE ACONTECE AO DESINSTALAR
+--------------------------------------------------------------------------------
+
+    1. Le do manifesto a lista de arquivos daquela biblioteca.
+    2. Apaga so os arquivos que NENHUMA outra biblioteca instalada reivindica.
+       (packaging chega junto do plotly E do pytest; pygments junto do pytest E
+       do rich. Remover um nao pode quebrar o outro.)
+    3. Varre os diretorios de topo que sobraram sem dono e apaga inteiros,
+       levando junto o __pycache__ que o Python criou depois da instalacao e que
+       nao existia na wheel.
+    4. Remove a entrada do manifesto e limpa diretorios vazios.
+
+Verificado: instalar plotly + pytest, importar os dois, remover plotly. A pasta
+plotly/ some inteira, packaging/ sobrevive, e o pytest continua importando.
+
+
+8. REPARAR E DIAGNOSTICAR
+--------------------------------------------------------------------------------
+
+REPARAR = desinstalar + instalar de novo, forcando o download. Serve para dois
+casos: o manifesto diz "instalada" mas os arquivos sumiram (o painel marca a
+linha como "quebrada" e acende um ponto no botao da toolbar), ou a versao do
+catalogo mudou e voce quer acompanhar.
+
+O diagnostico tambem acusa a armadilha que quebraria tudo em silencio: se o
+Python do bundle subir de versao, as bibliotecas instaladas ficam para uma ABI
+que nao existe mais. O manifesto grava contra qual ABI foi instalado (cp312) e o
+painel avisa quando ela nao bate mais com a do catalogo.
+
+
+9. BIBLIOTECA FORA DA LISTA (o segundo nivel)
+--------------------------------------------------------------------------------
+
+No fim do painel existe um campo para qualquer nome da PyPI. Ao clicar em
+Verificar, a AURORA consulta a PyPI e responde na hora, SEM baixar nada:
+
+    - se tem wheel pura  -> mostra versao, tamanho, licenca e o botao Instalar;
+    - se so tem compilada -> explica que nao roda no Python embarcado e manda
+                             usar o TCMD com o Python proprio da maquina.
+
+Aviso importante que o painel exibe: sem pip nao ha resolvedor de dependencias.
+Se a biblioteca importar outra que nao esteja instalada, o usuario precisa
+instalar essa outra tambem, uma a uma. Por isso a lista curada existe: nela o
+fecho de dependencias ja vem pronto e conferido.
+
+
+10. O QUE AINDA FALTA (bibliotecas compiladas)
+--------------------------------------------------------------------------------
+
+NumPy, SciPy, Matplotlib e pandas NAO instalam por este caminho, e nao ha
+ajuste no instalador que resolva. E uma incompatibilidade de ABI, nao de
+configuracao.
+
+Isso importa mais do que parece: a metodologia publicada do grupo depende dessas
+tres primeiras. O testbench cocotb da PMU (norma IEC/IEEE 60255-118-1) usa
+geracao de sinal, modelo de referencia em dupla precisao, filtro FIR classe M e
+estatistica de TVE/FE/ROCOF; o trabalho da CNN do TileCal compara a saida do
+SAPHO com a referencia em Python por erro medio absoluto e R^2.
+
+O que da para fazer HOJE, com o que o painel entrega:
+
+    mpmath   -> aritmetica de precisao arbitraria. Da para fixar a mantissa em
+                24 bits e modelar o float proprio do SAPHO (1+8+23, fora do
+                IEEE 754), separando erro de metodo de erro de arredondamento.
+    sympy    -> deducao exata de coeficientes de filtro, verificacao algebrica.
+    plotly   -> os graficos de conferencia, em HTML interativo.
+    vcdvcd   -> ler a forma de onda gerada e conferir por script.
+    pyvcd    -> despejar o modelo de referencia como onda, para comparar lado a
+                lado no GTKWave ou no Surfer.
+
+Isso cobre modelagem de referencia e conferencia, mas nao substitui NumPy em
+volume: laco de filtragem sobre milhares de amostras em Python puro e lento.
+
+As tres saidas possiveis para as compiladas, em ordem de custo:
+
+    A) Colocar no BUNDLE. O repositorio nipscernlab/aurora-toolchain ja monta o
+       bundle a partir de um snapshot fixado do MSYS2. NumPy e SciPy podem
+       entrar pela mesma CI, do mesmo snapshot, e ai a compatibilidade de ABI e
+       garantida por construcao. Custo: sobe o tamanho do bundle (NumPy sozinho
+       ocupa ~55 MB descompactado e arrasta o openblas) e obriga um bump de
+       toolchain para cada mudanca. E a rota mais controlada.
+
+    B) Subir o Python do bundle para 3.14 e acompanhar o MSYS2. Ai os pacotes
+       mingw-w64-x86_64-python-numpy prontos passam a servir. Custo: mexe no
+       cocotb, no VPI do Verilator e na toolchain inteira de uma vez.
+
+    C) Deixar com o usuario, via TCMD e o Python dele. Custo zero para nos, mas
+       o modelo de referencia sai de dentro do fluxo da AURORA.
+
+Recomendacao: A. O painel continua simples e nunca quebra, as libs puras chegam
+sob demanda, e as pesadas viram decisao de bundle, rara e verificada por CI.
+
+
+11. VERIFICACAO ANTES DE COMMITAR
+--------------------------------------------------------------------------------
+
+    node scripts/gen-pylib-catalog.js --check   # catalogo em dia
+    npx vitest run                              # testes
+    npx eslint main/python/ js/python/ scripts/gen-pylib-catalog.js
+    npx tsc --noEmit                            # tipos
+    node scripts/check-i18n.js                  # strings pt/en em paridade
+
+================================================================================
